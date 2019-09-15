@@ -1,0 +1,14 @@
+[package]
+name = "my_des"
+description = "Implementation of the DES algorithm (FIPS Publication 46-3)."
+version = "0.1.0"
+authors = ["Christopher Strecker <chris@foldl.de>"]
+edition = "2018"
+readme = "README"
+license = "MIT"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+rand = "0.7.0"
