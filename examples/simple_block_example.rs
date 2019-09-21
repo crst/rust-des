@@ -1,4 +1,4 @@
-extern crate my_des;
+use my_des::des;
 
 
 fn main() {
@@ -7,9 +7,9 @@ fn main() {
 
     let expected_encrypted_value: u64 = 0x85E813540F0AB405;
 
-    let keys: [u64; 16] = my_des::generate_round_keys(sample_key);
-    let enc: u64 = my_des::encrypt_block(sample_inp, keys);
-    let dec: u64 = my_des::decrypt_block(enc, keys);
+    let keys: [u64; 16] = des::generate_round_keys(sample_key);
+    let enc: u64 = des::encrypt_block(sample_inp, keys);
+    let dec: u64 = des::decrypt_block(enc, keys);
     println!("ENC({}, {}) should be: {}", sample_inp, sample_key, expected_encrypted_value);
     println!("Actually encrypted value: {}", enc);
     println!("DEC({}, {}) is: {}", enc, sample_key, dec);
