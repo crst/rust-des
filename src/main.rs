@@ -7,7 +7,9 @@ use rand::prelude::*;
 
 use std::error::Error;
 use std::fs;
+use std::io;
 use std::io::{Read, Write};
+use std::process;
 
 use my_des::*;
 
@@ -55,8 +57,7 @@ fn prepare_output(data: &Vec<u64>, remove_padding: bool) -> Vec<u8> {
         }
     }
 
-    if remove_padding {
-        // TODO: handle possible error case where data is empty.
+    if remove_padding && result.len() > 0 {
         let pad_bytes = result.pop().unwrap();
         for _ in 1..pad_bytes {
             result.pop();
@@ -67,22 +68,19 @@ fn prepare_output(data: &Vec<u64>, remove_padding: bool) -> Vec<u8> {
 }
 
 // Read the input file.
-fn read_input(args: &ArgMatches, add_padding: bool) -> Vec<u64> {
-    // TODO: error handling...
-    let mut in_file = fs::File::open(args.value_of("in").unwrap()).unwrap();
-    let mut data: Vec<u8> = Vec::new();
-    let _data_bytes_read = in_file.read_to_end(&mut data).unwrap();
-    let input = prepare_input(&data, add_padding);
-    return input;
+fn read_input(args: &ArgMatches, add_padding: bool) -> Result<Vec<u64>, io::Error> {
+    let mut in_file = fs::File::open(args.value_of("in").unwrap())?;
+    let mut buf: Vec<u8> = Vec::new();
+    let _data_bytes_read = in_file.read_to_end(&mut buf)?;
+    return Ok(prepare_input(&buf, add_padding));
 }
 
 // Read the key file, and derive a 64-bit key by using half of the
 // bits from the MD5 digest.
-fn read_key(args: &ArgMatches) -> u64 {
-    // TODO: error handling...
+fn read_key(args: &ArgMatches) -> Result<u64, io::Error> {
     let mut result: u64 = 0;
 
-    let key = fs::read_to_string(args.value_of("key").unwrap()).unwrap();
+    let key = fs::read_to_string(args.value_of("key").unwrap())?;
     let digest = md5::compute(key);
 
     for i in 8..16 {
@@ -90,7 +88,7 @@ fn read_key(args: &ArgMatches) -> u64 {
         result |= digest.0[i] as u64;
     }
 
-    return result;
+    return Ok(result);
 }
 
 // Get the corresponding cipher mode.
@@ -104,40 +102,45 @@ fn get_cipher_mode(args: &ArgMatches) -> Box<dyn Cipher> {
 }
 
 // Write the output file.
-fn write_output(args: &ArgMatches, output: &Vec<u64>, remove_padding: bool) -> std::io::Result<()> {
-    // TODO: error handling...
-    let mut out_file = match fs::OpenOptions::new().write(true)
+fn write_output(args: &ArgMatches, output: &Vec<u64>, remove_padding: bool) -> Result<(), io::Error> {
+    let mut out_file = fs::OpenOptions::new().write(true)
         .create_new(true)
-        .open(args.value_of("out").unwrap()) {
-            Err(e) => { panic!(e) },
-            Ok(f) => f,
-        };
+        .open(args.value_of("out").unwrap())?;
 
     let to_file: Vec<u8> = prepare_output(output, remove_padding);
-    let success = out_file.write_all(&to_file);
-    return success;
+    return out_file.write_all(&to_file);
+}
+
+
+// Encrypt or decrypt according to arguments.
+fn run(args: &ArgMatches, f: &dyn Fn(&Vec<u64>, u64, Box<dyn Cipher>) -> Vec<u64>, pad_input: bool) -> Result<(), io::Error> {
+    let input = match read_input(args, pad_input) {
+        Err(e) => { eprintln!("Could not read input file: {}", e); return Err(e)},
+        Ok(input) => input,
+    };
+
+    let key: u64 = match read_key(&args) {
+        Err(e) => { eprintln!("Error getting the key: {}", e); return Err(e); },
+        Ok(k) => k,
+    };
+
+    let mode = get_cipher_mode(args);
+    let processed = f(&input, key, mode);
+
+    match write_output(args, &processed, !pad_input) {
+        Err(e) => { eprintln!("Could not write the output file: {}", e); return Err(e); },
+        Ok(_) => return Ok(()),
+    };
 }
 
 // Encrypt according to arguments.
-fn encrypt(args: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    // TODO: actual error handling...
-    let input = read_input(args, true);
-    let key: u64 = read_key(&args);
-    let mode = get_cipher_mode(args);
-    let encrypted = my_des::encrypt(&input, key, mode);
-    let succcess = write_output(args, &encrypted, false);
-    return Ok(());
+fn encrypt(args: &ArgMatches) -> Result<(), io::Error> {
+    return run(args, &my_des::encrypt, true);
 }
 
 // Decrypt according to arguments.
-fn decrypt(args: &ArgMatches) -> Result<(), Box<dyn Error>> {
-    // TODO: actual error handling...
-    let input = read_input(args, false);
-    let key: u64 = read_key(&args);
-    let mode = get_cipher_mode(args);
-    let encrypted = my_des::decrypt(&input, key, mode);
-    let success = write_output(args, &encrypted, true);
-    return Ok(());
+fn decrypt(args: &ArgMatches) -> Result<(), io::Error> {
+    return run(args, &my_des::decrypt, false);
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -176,7 +179,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         _ => panic!("Action should be encrypt or decrypt!"),
     };
 
-    return result;
+    match result {
+        Err(_) => { eprintln!("Something went wrong!"); process::exit(1); },
+        Ok(_) => { println!("Success!"); return Ok(()) },
+    };
 }
 
 
