@@ -5,23 +5,43 @@ use rand::prelude::*;
 
 
 pub struct ECB;
-pub struct CBC;
-
-pub trait Cipher {
-    fn encrypt(&self, plaintext: &Vec<u64>, key: u64) -> Vec<u64>;
-    fn decrypt(&self, ciphertext: &Vec<u64>, key: u64) -> Vec<u64>;
+impl ECB {
+    pub fn new() -> ECB { ECB }
 }
 
-pub fn encrypt(plaintext: &Vec<u64>, key: u64, mode: Box<dyn Cipher>) -> Vec<u64> {
+pub struct CBC {
+    is_active: bool,
+    prev_block: u64,
+}
+impl CBC {
+    pub fn new() -> CBC {
+        let mut prev_block: u64 = 0;
+        while prev_block == 0 {
+            // Avoid an empty initialization_vector.
+            prev_block = random_u64();
+        }
+        CBC {
+            is_active: false,
+            prev_block: prev_block,
+        }
+    }
+}
+
+pub trait Cipher {
+    fn encrypt(&mut self, plaintext: &Vec<u64>, key: u64) -> Vec<u64>;
+    fn decrypt(&mut self, ciphertext: &Vec<u64>, key: u64) -> Vec<u64>;
+}
+
+pub fn encrypt(plaintext: &Vec<u64>, key: u64, mode: &mut Box<dyn Cipher>) -> Vec<u64> {
     return mode.encrypt(plaintext, key);
 }
 
-pub fn decrypt(ciphertext: &Vec<u64>, key: u64, mode: Box<dyn Cipher>) -> Vec<u64> {
+pub fn decrypt(ciphertext: &Vec<u64>, key: u64, mode: &mut Box<dyn Cipher>) -> Vec<u64> {
     return mode.decrypt(ciphertext, key);
 }
 
 impl Cipher for ECB {
-    fn encrypt(&self, plaintext: &Vec<u64>, key: u64) -> Vec<u64> {
+    fn encrypt(&mut self, plaintext: &Vec<u64>, key: u64) -> Vec<u64> {
         let mut result: Vec<u64> = Vec::new();
         let keys = des::generate_round_keys(key);
         for &block in plaintext.iter() {
@@ -30,7 +50,7 @@ impl Cipher for ECB {
         return result;
     }
 
-    fn decrypt(&self, ciphertext: &Vec<u64>, key: u64) -> Vec<u64> {
+    fn decrypt(&mut self, ciphertext: &Vec<u64>, key: u64) -> Vec<u64> {
         let mut result: Vec<u64> = Vec::new();
         let keys = des::generate_round_keys(key);
         for &block in ciphertext.iter() {
@@ -41,35 +61,41 @@ impl Cipher for ECB {
 }
 
 impl Cipher for CBC {
-    fn encrypt(&self, plaintext: &Vec<u64>, key: u64) -> Vec<u64> {
+    fn encrypt(&mut self, plaintext: &Vec<u64>, key: u64) -> Vec<u64> {
         let mut result: Vec<u64> = Vec::with_capacity(plaintext.len() + 1);
         let keys = des::generate_round_keys(key);
 
-        let mut initialization_vector: u64 = 0;
-        while initialization_vector == 0 {
-            // Avoid an empty initialization_vector.
-            initialization_vector = random_u64();
+        if !self.is_active {
+            // Add a random block at the beginning, so that we do not need
+            // to share the initialization vector.
+            let random_block = random_u64();
+            self.prev_block = des::encrypt_block(self.prev_block ^ random_block, keys);
+            result.push(self.prev_block);
+            self.is_active = true;
         }
 
-        let random_block = random_u64();
-        let mut b: u64 = des::encrypt_block(initialization_vector ^ random_block, keys);
-        result.push(b);
+        // Encrypt actual data blocks.
         for &block in plaintext.iter() {
-            b = des::encrypt_block(b ^ block, keys);
-            result.push(b);
+            self.prev_block = des::encrypt_block(self.prev_block ^ block, keys);
+            result.push(self.prev_block);
         }
 
         return result;
     }
 
-    fn decrypt(&self, ciphertext: &Vec<u64>, key: u64) -> Vec<u64> {
+    fn decrypt(&mut self, ciphertext: &Vec<u64>, key: u64) -> Vec<u64> {
         let mut result: Vec<u64> = Vec::with_capacity(ciphertext.len() - 1);
         let keys = des::generate_round_keys(key);
 
-        let mut initialization_vector: u64 = ciphertext[0];
-        for &block in ciphertext.iter().skip(1) {
-            result.push(initialization_vector ^ des::decrypt_block(block, keys));
-            initialization_vector = block;
+        let mut skip_blocks = 0;
+        if !self.is_active {
+            self.prev_block = ciphertext[0];
+            self.is_active = true;
+            skip_blocks = 1;
+        }
+        for &block in ciphertext.iter().skip(skip_blocks) {
+            result.push(self.prev_block ^ des::decrypt_block(block, keys));
+            self.prev_block = block;
         }
 
         return result;
@@ -106,8 +132,11 @@ mod tests {
 
             let key: u64 = random_u64();
 
-            let ciphertext = encrypt(&plaintext, key, Box::new(ECB));
-            let decrypted = decrypt(&ciphertext, key, Box::new(ECB));
+            let mut mode: Box<dyn Cipher> = Box::new(ECB::new());
+            let ciphertext = encrypt(&plaintext, key, &mut mode);
+
+            let mut mode: Box<dyn Cipher> = Box::new(ECB::new());
+            let decrypted = decrypt(&ciphertext, key, &mut mode);
 
             assert_eq!(plaintext, decrypted);
         }
@@ -125,8 +154,11 @@ mod tests {
 
             let key: u64 = random_u64();
 
-            let ciphertext = encrypt(&plaintext, key, Box::new(CBC));
-            let decrypted = decrypt(&ciphertext, key, Box::new(CBC));
+            let mut mode: Box<dyn Cipher> = Box::new(CBC::new());
+            let ciphertext = encrypt(&plaintext, key, &mut mode);
+
+            let mut mode: Box<dyn Cipher> = Box::new(CBC::new());
+            let decrypted = decrypt(&ciphertext, key, &mut mode);
 
             assert_eq!(plaintext, decrypted);
         }
@@ -146,8 +178,10 @@ mod tests {
 
             let key: u64 = random_u64();
 
-            let ecb_ciphertext = encrypt(&plaintext, key, Box::new(ECB));
-            let cbc_ciphertext = encrypt(&plaintext, key, Box::new(CBC));
+            let mut ecb_mode: Box<dyn Cipher> = Box::new(ECB::new());
+            let mut cbc_mode: Box<dyn Cipher> = Box::new(CBC::new());
+            let ecb_ciphertext = encrypt(&plaintext, key, &mut ecb_mode);
+            let cbc_ciphertext = encrypt(&plaintext, key, &mut cbc_mode);
 
             for i in 0..num_bytes {
                 if i == 0 || cbc_ciphertext[i-1] != 0 {
@@ -178,8 +212,10 @@ mod tests {
 
             let key: u64 = random_u64();
 
-            let cbc_ciphertext = encrypt(&plaintext, key, Box::new(CBC));
-            let wrong_plaintext = decrypt(&cbc_ciphertext, key, Box::new(ECB));
+            let mut ecb_mode: Box<dyn Cipher> = Box::new(ECB::new());
+            let mut cbc_mode: Box<dyn Cipher> = Box::new(CBC::new());
+            let cbc_ciphertext = encrypt(&plaintext, key, &mut cbc_mode);
+            let wrong_plaintext = decrypt(&cbc_ciphertext, key, &mut ecb_mode);
 
             assert_ne!(plaintext, wrong_plaintext);
         }
@@ -197,8 +233,10 @@ mod tests {
 
             let key: u64 = random_u64();
 
-            let ecb_ciphertext = encrypt(&plaintext, key, Box::new(ECB));
-            let wrong_plaintext = decrypt(&ecb_ciphertext, key, Box::new(CBC));
+            let mut ecb_mode: Box<dyn Cipher> = Box::new(ECB::new());
+            let mut cbc_mode: Box<dyn Cipher> = Box::new(CBC::new());
+            let ecb_ciphertext = encrypt(&plaintext, key, &mut ecb_mode);
+            let wrong_plaintext = decrypt(&ecb_ciphertext, key, &mut cbc_mode);
 
             assert_ne!(plaintext, wrong_plaintext);
         }

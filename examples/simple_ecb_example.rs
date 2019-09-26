@@ -10,9 +10,11 @@ fn main() {
     let sample_key: u64 = 0x85E813540F0AB405;
     println!("Sample input: {:?}", sample_inp);
 
-    let ciphertext = my_des::encrypt(&sample_inp, sample_key, Box::new(my_des::ECB));
+    let mut mode: Box<dyn my_des::Cipher> = Box::new(my_des::ECB::new());
+    let ciphertext = my_des::encrypt(&sample_inp, sample_key, &mut mode);
     println!("ECB cipher: {:?}", ciphertext);
 
-    let plaintext = my_des::decrypt(&ciphertext, sample_key, Box::new(my_des::ECB));
+    let mut mode: Box<dyn my_des::Cipher> = Box::new(my_des::ECB::new());
+    let plaintext = my_des::decrypt(&ciphertext, sample_key, &mut mode);
     println!("Plaintext: {:?}", plaintext);
 }

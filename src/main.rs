@@ -14,6 +14,97 @@ use std::process;
 use my_des::*;
 
 
+const BUFFER_SIZE: usize = 1024 * 64;
+
+
+#[derive(Clone, Copy, PartialEq)]
+enum Action {
+    Encrypt,
+    Decrypt,
+}
+
+// Iterator for reading the input file in chunks.
+struct BlockReader {
+    action: Action,
+    file: fs::File,
+    buffer_size: usize,
+    done: bool,
+}
+
+// Each iteration will read one chunk of the file. We need to know if
+// the current chunk is the last one, in case we have to add or remove
+// the padding.
+struct BlockReaderChunk {
+    chunk: Vec<u64>,
+    is_last_chunk: bool,
+}
+
+impl BlockReader {
+    fn new(action: Action, file_name: &str) -> Result<BlockReader, io::Error> {
+        let f = fs::File::open(file_name)?;
+        Ok(BlockReader {
+            action: action,
+            file: f,
+            // Since we read bytes from the file, but want to have 64
+            // bit blocks, the actual buffer size must (!) be a
+            // multiple of 8 so that we always have complete blocks.
+            buffer_size: BUFFER_SIZE * 8,
+            done: false,
+        })
+    }
+}
+
+impl Iterator for BlockReader {
+    type Item = Result<BlockReaderChunk, io::Error>;
+
+    // Read BUFFER_SIZE 64 bit blocks from the file, add padding to
+    // the last block if necessary, and return a vector of u64.
+    fn next(&mut self) -> Option<Self::Item> {
+        if !self.done {
+            let mut raw_buffer: Vec<u8> = vec![0u8; self.buffer_size];
+            let bytes_read = match self.file.read(&mut raw_buffer) {
+                Err(e) => { return Some(Err(e)); },
+                Ok(b) => b,
+            };
+
+            self.done = !(bytes_read == self.buffer_size);
+            let pad: bool = self.action == Action::Encrypt && self.done;
+            let buffer: Vec<u64> = prepare_input(&raw_buffer[0..bytes_read].to_vec(), pad);
+
+            return Some(Ok(BlockReaderChunk {
+                chunk: buffer,
+                is_last_chunk: self.done,
+            }));
+        }
+        return None;
+    }
+}
+
+struct BlockWriter {
+    action: Action,
+    out_file: fs::File,
+}
+
+impl BlockWriter {
+    pub fn new(action: Action, out_file_name: &str) -> Result<BlockWriter, io::Error> {
+        let out_file = fs::OpenOptions::new().write(true)
+            .create_new(true)
+            .open(out_file_name)?;
+
+        Ok(BlockWriter {
+            action: action,
+            out_file: out_file,
+        })
+    }
+
+    pub fn write(&mut self, data: &Vec<u64>, is_last_chunk: bool) -> Result<(), io::Error> {
+        let remove_padding: bool = self.action == Action::Decrypt && is_last_chunk;
+        let output: Vec<u8> = prepare_output(data, remove_padding);
+        return self.out_file.write_all(&output);
+    }
+}
+
+
 // Convert read bytes to a Vector of 64-bit values, optionally
 // including ANSI X9.23 padding (for the encryption case).
 fn prepare_input(data: &Vec<u8>, add_padding: bool) -> Vec<u64> {
@@ -30,7 +121,7 @@ fn prepare_input(data: &Vec<u8>, add_padding: bool) -> Vec<u64> {
         if i < data.len() {
             buf |= data[i] as u64;
         } else if i == data.len() + num_pad_bytes - 1 {
-            buf |= num_pad_bytes as u64
+            buf |= num_pad_bytes as u64;
         } else {
             buf |= rng.gen_range(0, 255);
         }
@@ -67,14 +158,6 @@ fn prepare_output(data: &Vec<u64>, remove_padding: bool) -> Vec<u8> {
     return result;
 }
 
-// Read the input file.
-fn read_input(args: &ArgMatches, add_padding: bool) -> Result<Vec<u64>, io::Error> {
-    let mut in_file = fs::File::open(args.value_of("in").unwrap())?;
-    let mut buf: Vec<u8> = Vec::new();
-    let _data_bytes_read = in_file.read_to_end(&mut buf)?;
-    return Ok(prepare_input(&buf, add_padding));
-}
-
 // Read the key file, and derive a 64-bit key by using half of the
 // bits from the MD5 digest.
 fn read_key(args: &ArgMatches) -> Result<u64, io::Error> {
@@ -94,53 +177,55 @@ fn read_key(args: &ArgMatches) -> Result<u64, io::Error> {
 // Get the corresponding cipher mode.
 fn get_cipher_mode(args: &ArgMatches) -> Box<dyn Cipher> {
     let mode: Box<dyn Cipher> = match args.value_of("mode").unwrap() {
-        "ECB" => Box::new(my_des::ECB),
-        "CBC" => Box::new(my_des::CBC),
+        "ECB" => Box::new(my_des::ECB::new()),
+        "CBC" => Box::new(my_des::CBC::new()),
         _ => panic!("Unknown cipher mode!"),
     };
     return mode;
 }
 
-// Write the output file.
-fn write_output(args: &ArgMatches, output: &Vec<u64>, remove_padding: bool) -> Result<(), io::Error> {
-    let mut out_file = fs::OpenOptions::new().write(true)
-        .create_new(true)
-        .open(args.value_of("out").unwrap())?;
-
-    let to_file: Vec<u8> = prepare_output(output, remove_padding);
-    return out_file.write_all(&to_file);
-}
-
 
 // Encrypt or decrypt according to arguments.
-fn run(args: &ArgMatches, f: &dyn Fn(&Vec<u64>, u64, Box<dyn Cipher>) -> Vec<u64>, pad_input: bool) -> Result<(), io::Error> {
-    let input = match read_input(args, pad_input) {
-        Err(e) => { eprintln!("Could not read input file: {}", e); return Err(e)},
-        Ok(input) => input,
-    };
-
+fn run(action: Action, args: &ArgMatches, f: &dyn Fn(&Vec<u64>, u64, &mut Box<dyn Cipher>) -> Vec<u64>) -> Result<(), io::Error> {
     let key: u64 = match read_key(&args) {
         Err(e) => { eprintln!("Error getting the key: {}", e); return Err(e); },
         Ok(k) => k,
     };
 
-    let mode = get_cipher_mode(args);
-    let processed = f(&input, key, mode);
+    let mut mode = get_cipher_mode(args);
 
-    match write_output(args, &processed, !pad_input) {
-        Err(e) => { eprintln!("Could not write the output file: {}", e); return Err(e); },
-        Ok(_) => return Ok(()),
+    let reader = match BlockReader::new(action, args.value_of("in").unwrap()) {
+        Err(e) => { eprintln!("Error while trying to open input file: {}", e); return Err(e); },
+        Ok(r) => r,
     };
+    let mut writer = match BlockWriter::new(action, args.value_of("out").unwrap()) {
+        Err(e) => { eprintln!("Error while trying to open output file: {}", e); return Err(e); },
+        Ok(w) => w,
+    };
+
+    for chunk in reader {
+        let (processed, is_last_chunk) = match chunk {
+            Err(e) => { eprintln!("Error while reading the input file: {}", e); return Err(e) },
+            Ok(input) => { (f(&input.chunk, key, &mut mode), input.is_last_chunk) },
+        };
+
+        match writer.write(&processed, is_last_chunk) {
+            Err(e) => { eprintln!("Could not write to output file: {}", e); return Err(e); },
+            Ok(_) => { },
+        }
+    }
+
+    return Ok(());
 }
 
 // Encrypt according to arguments.
 fn encrypt(args: &ArgMatches) -> Result<(), io::Error> {
-    return run(args, &my_des::encrypt, true);
+    return run(Action::Encrypt, args, &my_des::encrypt);
 }
 
 // Decrypt according to arguments.
 fn decrypt(args: &ArgMatches) -> Result<(), io::Error> {
-    return run(args, &my_des::decrypt, false);
+    return run(Action::Decrypt, args, &my_des::decrypt);
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
