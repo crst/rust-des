@@ -1,6 +1,5 @@
 mod data;
 
-
 #[derive(Clone, Copy, PartialEq)]
 pub enum Action {
     Encrypt,
@@ -55,7 +54,7 @@ fn f(block: u64, key: u64) -> u64 {
     // Apply the S-Boxes via the direct lookup table.
     let mask: u64 = 0b111111;
     for (i, sbox) in data::BOXES.iter().enumerate() {
-        let val: u64 = (tmp & (mask << (42 - (i*6)))) >> (42 - (i*6));
+        let val: u64 = (tmp & (mask << (42 - (i * 6)))) >> (42 - (i * 6));
         result = (result << 4) | sbox[data::BOX_LOOKUP[val as usize]] as u64;
     }
 
@@ -99,7 +98,6 @@ pub fn decrypt_block(block: u64, keys: [u64; 16]) -> u64 {
     return run_network(block, rks);
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,8 +112,12 @@ mod tests {
         // random blocks.
         for _ in 0..1000 {
             let block: u64 = random_u64();
-            assert_eq!(block, permute(permute(block, 64, &data::IP), 64, &data::IIP),
-                       "Failed for input: {}", block);
+            assert_eq!(
+                block,
+                permute(permute(block, 64, &data::IP), 64, &data::IIP),
+                "Failed for input: {}",
+                block
+            );
         }
     }
 
@@ -128,8 +130,12 @@ mod tests {
             let sample_key: u64 = random_u64();
 
             let keys = generate_round_keys(sample_key);
-            assert_eq!(sample_inp, decrypt_block(encrypt_block(sample_inp, keys), keys),
-                       "Failed for input: {}", sample_inp);
+            assert_eq!(
+                sample_inp,
+                decrypt_block(encrypt_block(sample_inp, keys), keys),
+                "Failed for input: {}",
+                sample_inp
+            );
         }
     }
 
@@ -160,7 +166,7 @@ mod tests {
             0b100101_111100_010111_010001_111110_101011_101001_000001,
             0b010111_110100_001110_110111_111100_101110_011100_111010,
             0b101111_111001_000110_001101_001111_010011_111100_001010,
-            0b110010_110011_110110_001011_000011_100001_011111_110101
+            0b110010_110011_110110_001011_000011_100001_011111_110101,
         ];
 
         assert_eq!(keys, expected_output);
@@ -168,8 +174,10 @@ mod tests {
 
     #[test]
     fn dev_ip_permutation() {
-        let input: u64 = 0b0000_0001_0010_0011_0100_0101_0110_0111_1000_1001_1010_1011_1100_1101_1110_1111;
-        let expected_output: u64 = 0b1100_1100_0000_0000_1100_1100_1111_1111_1111_0000_1010_1010_1111_0000_1010_1010;
+        let input: u64 =
+            0b0000_0001_0010_0011_0100_0101_0110_0111_1000_1001_1010_1011_1100_1101_1110_1111;
+        let expected_output: u64 =
+            0b1100_1100_0000_0000_1100_1100_1111_1111_1111_0000_1010_1010_1111_0000_1010_1010;
 
         assert_eq!(expected_output, permute(input, 64, &data::IP));
     }
@@ -219,9 +227,8 @@ mod tests {
             0x07_0C_AC_85_90_24_12_33,
             0x78_F8_7B_6E_3D_FE_CF_61,
             0x95_EC_25_78_C2_C4_33_F0,
-            0x1B_1A_2D_DB_4C_64_24_38
+            0x1B_1A_2D_DB_4C_64_24_38,
         ];
-
 
         for i in 0..16 {
             let keys: [u64; 16] = generate_round_keys(input);

@@ -1,5 +1,5 @@
-extern crate rand;
 extern crate num_cpus;
+extern crate rand;
 
 pub mod des;
 
@@ -7,7 +7,6 @@ use rand::prelude::*;
 use std::sync::mpsc;
 use std::sync::{Arc, RwLock};
 use std::thread;
-
 
 // To process each chunk in parallel, we store parts together with the
 // position within the chunk.
@@ -19,10 +18,17 @@ struct ChunkPart {
 
 pub struct ECB;
 impl ECB {
-    pub fn new() -> ECB { ECB }
+    pub fn new() -> ECB {
+        ECB
+    }
 
     // Parallel encrypt or decrypt.
-    pub fn process(&self, f: &'static (dyn Fn(u64, [u64; 16]) -> u64 + Sync), input: Vec<u64>, key: u64) -> Vec<u64> {
+    pub fn process(
+        &self,
+        f: &'static (dyn Fn(u64, [u64; 16]) -> u64 + Sync),
+        input: Vec<u64>,
+        key: u64,
+    ) -> Vec<u64> {
         let keys = des::generate_round_keys(key);
         let mut result: Vec<u64> = vec![0u64; input.len()];
 
@@ -46,7 +52,7 @@ impl ECB {
                 let local_data = local_input_ref.read().unwrap();
                 let idx = t * part_size;
                 let local_chunk_part = match t < num_threads - 1 {
-                    true => &local_data[idx..idx+part_size],
+                    true => &local_data[idx..idx + part_size],
                     false => &local_data[idx..],
                 };
 
@@ -55,10 +61,12 @@ impl ECB {
                     local_result.push(f(block, keys));
                 }
 
-                local_sender.send(ChunkPart {
-                    position: t,
-                    data: local_result,
-                }).unwrap();
+                local_sender
+                    .send(ChunkPart {
+                        position: t,
+                        data: local_result,
+                    })
+                    .unwrap();
             });
             handles.push(handle);
         }
@@ -165,7 +173,6 @@ impl Cipher for CBC {
     }
 }
 
-
 pub fn random_u64() -> u64 {
     let mut result: u64 = 0;
     let mut buffer: [u8; 8] = [0; 8];
@@ -177,7 +184,6 @@ pub fn random_u64() -> u64 {
     }
     return result;
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -247,19 +253,19 @@ mod tests {
             let cbc_ciphertext = encrypt(plaintext.to_vec(), key, &mut cbc_mode);
 
             for i in 0..num_bytes {
-                if i == 0 || cbc_ciphertext[i-1] != 0 {
+                if i == 0 || cbc_ciphertext[i - 1] != 0 {
                     assert_ne!(ecb_ciphertext[i], cbc_ciphertext[i]);
 
                     // Actually relevant comparison, since the CBC cipher
                     // added one random block at the beginning.
-                    assert_ne!(ecb_ciphertext[i], cbc_ciphertext[i+1]);
+                    assert_ne!(ecb_ciphertext[i], cbc_ciphertext[i + 1]);
                 } else {
                     // If by chance the previously encrypted CBC block
                     // was 0, both ECB and CBC blocks should be the
                     // same in that case.
-                    assert_eq!(ecb_ciphertext[i], cbc_ciphertext[i+1]);
+                    assert_eq!(ecb_ciphertext[i], cbc_ciphertext[i + 1]);
                 }
-            };
+            }
         }
     }
 

@@ -13,9 +13,7 @@ use std::process;
 
 use my_des::*;
 
-
 const BUFFER_SIZE: usize = 1024 * 64;
-
 
 // Iterator for reading the input file in chunks.
 struct ChunkReader {
@@ -57,7 +55,9 @@ impl Iterator for ChunkReader {
         if !self.done {
             let mut raw_buffer: Vec<u8> = vec![0u8; self.buffer_size];
             let bytes_read = match self.file.read(&mut raw_buffer) {
-                Err(e) => { return Some(Err(e)); },
+                Err(e) => {
+                    return Some(Err(e));
+                }
                 Ok(b) => b,
             };
 
@@ -81,7 +81,8 @@ struct ChunkWriter {
 
 impl ChunkWriter {
     pub fn new(action: des::Action, out_file_name: &str) -> Result<ChunkWriter, io::Error> {
-        let out_file = fs::OpenOptions::new().write(true)
+        let out_file = fs::OpenOptions::new()
+            .write(true)
             .create_new(true)
             .open(out_file_name)?;
 
@@ -97,7 +98,6 @@ impl ChunkWriter {
         return self.out_file.write_all(&output);
     }
 }
-
 
 // Convert read bytes to a Vector of 64-bit values, optionally
 // including ANSI X9.23 padding (for the encryption case).
@@ -128,7 +128,6 @@ fn prepare_input(data: &Vec<u8>, add_padding: bool) -> Vec<u64> {
 
     return result;
 }
-
 
 // Convert encrypted or decrypted 64-bit blocks back to a Vector of u8
 // values, optionally removing the ANSI X9.23 padding (for the
@@ -178,34 +177,52 @@ fn get_cipher_mode(args: &ArgMatches) -> Box<dyn Cipher> {
     return mode;
 }
 
-
 // Encrypt or decrypt according to arguments.
-fn run(action: des::Action, args: &ArgMatches, f: &dyn Fn(Vec<u64>, u64, &mut Box<dyn Cipher>) -> Vec<u64>) -> Result<(), io::Error> {
+fn run(
+    action: des::Action,
+    args: &ArgMatches,
+    f: &dyn Fn(Vec<u64>, u64, &mut Box<dyn Cipher>) -> Vec<u64>,
+) -> Result<(), io::Error> {
     let key: u64 = match read_key(&args) {
-        Err(e) => { eprintln!("Error getting the key: {}", e); return Err(e); },
+        Err(e) => {
+            eprintln!("Error getting the key: {}", e);
+            return Err(e);
+        }
         Ok(k) => k,
     };
 
     let mut mode = get_cipher_mode(args);
 
     let reader = match ChunkReader::new(action, args.value_of("in").unwrap()) {
-        Err(e) => { eprintln!("Error while trying to open input file: {}", e); return Err(e); },
+        Err(e) => {
+            eprintln!("Error while trying to open input file: {}", e);
+            return Err(e);
+        }
         Ok(r) => r,
     };
     let mut writer = match ChunkWriter::new(action, args.value_of("out").unwrap()) {
-        Err(e) => { eprintln!("Error while trying to open output file: {}", e); return Err(e); },
+        Err(e) => {
+            eprintln!("Error while trying to open output file: {}", e);
+            return Err(e);
+        }
         Ok(w) => w,
     };
 
     for chunk in reader {
         let (processed, is_last_chunk) = match chunk {
-            Err(e) => { eprintln!("Error while reading the input file: {}", e); return Err(e) },
-            Ok(chunk) => { (f(chunk.data, key, &mut mode), chunk.is_last_chunk) },
+            Err(e) => {
+                eprintln!("Error while reading the input file: {}", e);
+                return Err(e);
+            }
+            Ok(chunk) => (f(chunk.data, key, &mut mode), chunk.is_last_chunk),
         };
 
         match writer.write(&processed, is_last_chunk) {
-            Err(e) => { eprintln!("Could not write to output file: {}", e); return Err(e); },
-            Ok(_) => { },
+            Err(e) => {
+                eprintln!("Could not write to output file: {}", e);
+                return Err(e);
+            }
+            Ok(_) => {}
         }
     }
 
@@ -229,27 +246,39 @@ fn main() -> Result<(), Box<dyn Error>> {
         .setting(AppSettings::SubcommandRequiredElseHelp)
         .subcommand(SubCommand::with_name("encrypt"))
         .subcommand(SubCommand::with_name("decrypt"))
-        .arg(Arg::with_name("mode")
-             .short("m").long("mode")
-             .required(true)
-             .takes_value(true)
-             .possible_values(&modes)
-             .help("ECB or CBC"))
-        .arg(Arg::with_name("in")
-             .short("i").long("in")
-             .required(true)
-             .takes_value(true)
-             .help("Input file"))
-        .arg(Arg::with_name("out")
-             .short("o").long("out")
-             .required(true)
-             .takes_value(true)
-             .help("Output file"))
-        .arg(Arg::with_name("key")
-             .short("k").long("key")
-             .required(true)
-             .takes_value(true)
-             .help("Key file"))
+        .arg(
+            Arg::with_name("mode")
+                .short("m")
+                .long("mode")
+                .required(true)
+                .takes_value(true)
+                .possible_values(&modes)
+                .help("ECB or CBC"),
+        )
+        .arg(
+            Arg::with_name("in")
+                .short("i")
+                .long("in")
+                .required(true)
+                .takes_value(true)
+                .help("Input file"),
+        )
+        .arg(
+            Arg::with_name("out")
+                .short("o")
+                .long("out")
+                .required(true)
+                .takes_value(true)
+                .help("Output file"),
+        )
+        .arg(
+            Arg::with_name("key")
+                .short("k")
+                .long("key")
+                .required(true)
+                .takes_value(true)
+                .help("Key file"),
+        )
         .get_matches();
 
     let result = match matches.subcommand() {
@@ -259,11 +288,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     match result {
-        Err(_) => { eprintln!("Something went wrong!"); process::exit(1); },
-        Ok(_) => { println!("Success!"); return Ok(()) },
+        Err(_) => {
+            eprintln!("Something went wrong!");
+            process::exit(1);
+        }
+        Ok(_) => {
+            println!("Success!");
+            return Ok(());
+        }
     };
 }
-
 
 #[cfg(test)]
 mod tests {
