@@ -17,15 +17,9 @@ use my_des::*;
 const BUFFER_SIZE: usize = 1024 * 64;
 
 
-#[derive(Clone, Copy, PartialEq)]
-enum Action {
-    Encrypt,
-    Decrypt,
-}
-
 // Iterator for reading the input file in chunks.
-struct BlockReader {
-    action: Action,
+struct ChunkReader {
+    action: des::Action,
     file: fs::File,
     buffer_size: usize,
     done: bool,
@@ -34,15 +28,15 @@ struct BlockReader {
 // Each iteration will read one chunk of the file. We need to know if
 // the current chunk is the last one, in case we have to add or remove
 // the padding.
-struct BlockReaderChunk {
-    chunk: Vec<u64>,
+struct Chunk {
+    data: Vec<u64>,
     is_last_chunk: bool,
 }
 
-impl BlockReader {
-    fn new(action: Action, file_name: &str) -> Result<BlockReader, io::Error> {
+impl ChunkReader {
+    fn new(action: des::Action, file_name: &str) -> Result<ChunkReader, io::Error> {
         let f = fs::File::open(file_name)?;
-        Ok(BlockReader {
+        Ok(ChunkReader {
             action: action,
             file: f,
             // Since we read bytes from the file, but want to have 64
@@ -54,8 +48,8 @@ impl BlockReader {
     }
 }
 
-impl Iterator for BlockReader {
-    type Item = Result<BlockReaderChunk, io::Error>;
+impl Iterator for ChunkReader {
+    type Item = Result<Chunk, io::Error>;
 
     // Read BUFFER_SIZE 64 bit blocks from the file, add padding to
     // the last block if necessary, and return a vector of u64.
@@ -68,11 +62,11 @@ impl Iterator for BlockReader {
             };
 
             self.done = !(bytes_read == self.buffer_size);
-            let pad: bool = self.action == Action::Encrypt && self.done;
+            let pad: bool = self.action == des::Action::Encrypt && self.done;
             let buffer: Vec<u64> = prepare_input(&raw_buffer[0..bytes_read].to_vec(), pad);
 
-            return Some(Ok(BlockReaderChunk {
-                chunk: buffer,
+            return Some(Ok(Chunk {
+                data: buffer,
                 is_last_chunk: self.done,
             }));
         }
@@ -80,25 +74,25 @@ impl Iterator for BlockReader {
     }
 }
 
-struct BlockWriter {
-    action: Action,
+struct ChunkWriter {
+    action: des::Action,
     out_file: fs::File,
 }
 
-impl BlockWriter {
-    pub fn new(action: Action, out_file_name: &str) -> Result<BlockWriter, io::Error> {
+impl ChunkWriter {
+    pub fn new(action: des::Action, out_file_name: &str) -> Result<ChunkWriter, io::Error> {
         let out_file = fs::OpenOptions::new().write(true)
             .create_new(true)
             .open(out_file_name)?;
 
-        Ok(BlockWriter {
+        Ok(ChunkWriter {
             action: action,
             out_file: out_file,
         })
     }
 
     pub fn write(&mut self, data: &Vec<u64>, is_last_chunk: bool) -> Result<(), io::Error> {
-        let remove_padding: bool = self.action == Action::Decrypt && is_last_chunk;
+        let remove_padding: bool = self.action == des::Action::Decrypt && is_last_chunk;
         let output: Vec<u8> = prepare_output(data, remove_padding);
         return self.out_file.write_all(&output);
     }
@@ -186,7 +180,7 @@ fn get_cipher_mode(args: &ArgMatches) -> Box<dyn Cipher> {
 
 
 // Encrypt or decrypt according to arguments.
-fn run(action: Action, args: &ArgMatches, f: &dyn Fn(&Vec<u64>, u64, &mut Box<dyn Cipher>) -> Vec<u64>) -> Result<(), io::Error> {
+fn run(action: des::Action, args: &ArgMatches, f: &dyn Fn(Vec<u64>, u64, &mut Box<dyn Cipher>) -> Vec<u64>) -> Result<(), io::Error> {
     let key: u64 = match read_key(&args) {
         Err(e) => { eprintln!("Error getting the key: {}", e); return Err(e); },
         Ok(k) => k,
@@ -194,11 +188,11 @@ fn run(action: Action, args: &ArgMatches, f: &dyn Fn(&Vec<u64>, u64, &mut Box<dy
 
     let mut mode = get_cipher_mode(args);
 
-    let reader = match BlockReader::new(action, args.value_of("in").unwrap()) {
+    let reader = match ChunkReader::new(action, args.value_of("in").unwrap()) {
         Err(e) => { eprintln!("Error while trying to open input file: {}", e); return Err(e); },
         Ok(r) => r,
     };
-    let mut writer = match BlockWriter::new(action, args.value_of("out").unwrap()) {
+    let mut writer = match ChunkWriter::new(action, args.value_of("out").unwrap()) {
         Err(e) => { eprintln!("Error while trying to open output file: {}", e); return Err(e); },
         Ok(w) => w,
     };
@@ -206,7 +200,7 @@ fn run(action: Action, args: &ArgMatches, f: &dyn Fn(&Vec<u64>, u64, &mut Box<dy
     for chunk in reader {
         let (processed, is_last_chunk) = match chunk {
             Err(e) => { eprintln!("Error while reading the input file: {}", e); return Err(e) },
-            Ok(input) => { (f(&input.chunk, key, &mut mode), input.is_last_chunk) },
+            Ok(chunk) => { (f(chunk.data, key, &mut mode), chunk.is_last_chunk) },
         };
 
         match writer.write(&processed, is_last_chunk) {
@@ -220,12 +214,12 @@ fn run(action: Action, args: &ArgMatches, f: &dyn Fn(&Vec<u64>, u64, &mut Box<dy
 
 // Encrypt according to arguments.
 fn encrypt(args: &ArgMatches) -> Result<(), io::Error> {
-    return run(Action::Encrypt, args, &my_des::encrypt);
+    return run(des::Action::Encrypt, args, &my_des::encrypt);
 }
 
 // Decrypt according to arguments.
 fn decrypt(args: &ArgMatches) -> Result<(), io::Error> {
-    return run(Action::Decrypt, args, &my_des::decrypt);
+    return run(des::Action::Decrypt, args, &my_des::decrypt);
 }
 
 fn main() -> Result<(), Box<dyn Error>> {

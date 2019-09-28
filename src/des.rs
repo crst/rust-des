@@ -1,6 +1,12 @@
 mod data;
 
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum Action {
+    Encrypt,
+    Decrypt,
+}
+
 fn permute(block: u64, block_size: u8, permutation: &[u8]) -> u64 {
     // Permutation of the input block. Since this implementation is
     // somewhat generic, `block` may actually be less than 64

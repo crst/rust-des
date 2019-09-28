@@ -1,12 +1,85 @@
 extern crate rand;
+extern crate num_cpus;
 
 pub mod des;
-use rand::prelude::*;
 
+use rand::prelude::*;
+use std::sync::mpsc;
+use std::sync::{Arc, RwLock};
+use std::thread;
+
+
+// To process each chunk in parallel, we store parts together with the
+// position within the chunk.
+#[derive(Debug)]
+struct ChunkPart {
+    position: usize,
+    data: Vec<u64>,
+}
 
 pub struct ECB;
 impl ECB {
     pub fn new() -> ECB { ECB }
+
+    // Parallel encrypt or decrypt.
+    pub fn process(&self, f: &'static (dyn Fn(u64, [u64; 16]) -> u64 + Sync), input: Vec<u64>, key: u64) -> Vec<u64> {
+        let keys = des::generate_round_keys(key);
+        let mut result: Vec<u64> = vec![0u64; input.len()];
+
+        // Use all available CPU's.
+        let num_threads: usize = num_cpus::get();
+        let part_size: usize = input.len() / num_threads;
+
+        // We'll read the input from read-only shared memory, but then
+        // collect the results via messages.
+        let input_ref = Arc::new(RwLock::new(input));
+        let (sender, receiver) = mpsc::channel();
+        let mut handles = vec![];
+
+        // Each thread processes only one part of the input, and sends
+        // the result to a channel from where we'll create the actual
+        // result later.
+        for t in 0..num_threads {
+            let local_sender = mpsc::Sender::clone(&sender);
+            let local_input_ref = Arc::clone(&input_ref);
+            let handle = thread::spawn(move || {
+                let local_data = local_input_ref.read().unwrap();
+                let idx = t * part_size;
+                let local_chunk_part = match t < num_threads - 1 {
+                    true => &local_data[idx..idx+part_size],
+                    false => &local_data[idx..],
+                };
+
+                let mut local_result: Vec<u64> = Vec::new();
+                for &block in local_chunk_part.iter() {
+                    local_result.push(f(block, keys));
+                }
+
+                local_sender.send(ChunkPart {
+                    position: t,
+                    data: local_result,
+                }).unwrap();
+            });
+            handles.push(handle);
+        }
+        // We need to drop the original sender, so it doesn't block.
+        drop(sender);
+
+        // Collect one message from each thread and build the result
+        // from the different parts.
+        for msg in receiver {
+            for (i, &d) in msg.data.iter().enumerate() {
+                result[msg.position * part_size + i] = d;
+            }
+        }
+
+        // Make sure we wait for each thread.
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        return result;
+    }
 }
 
 pub struct CBC {
@@ -28,40 +101,30 @@ impl CBC {
 }
 
 pub trait Cipher {
-    fn encrypt(&mut self, plaintext: &Vec<u64>, key: u64) -> Vec<u64>;
-    fn decrypt(&mut self, ciphertext: &Vec<u64>, key: u64) -> Vec<u64>;
+    fn encrypt(&mut self, plaintext: Vec<u64>, key: u64) -> Vec<u64>;
+    fn decrypt(&mut self, ciphertext: Vec<u64>, key: u64) -> Vec<u64>;
 }
 
-pub fn encrypt(plaintext: &Vec<u64>, key: u64, mode: &mut Box<dyn Cipher>) -> Vec<u64> {
+pub fn encrypt(plaintext: Vec<u64>, key: u64, mode: &mut Box<dyn Cipher>) -> Vec<u64> {
     return mode.encrypt(plaintext, key);
 }
 
-pub fn decrypt(ciphertext: &Vec<u64>, key: u64, mode: &mut Box<dyn Cipher>) -> Vec<u64> {
+pub fn decrypt(ciphertext: Vec<u64>, key: u64, mode: &mut Box<dyn Cipher>) -> Vec<u64> {
     return mode.decrypt(ciphertext, key);
 }
 
 impl Cipher for ECB {
-    fn encrypt(&mut self, plaintext: &Vec<u64>, key: u64) -> Vec<u64> {
-        let mut result: Vec<u64> = Vec::new();
-        let keys = des::generate_round_keys(key);
-        for &block in plaintext.iter() {
-            result.push(des::encrypt_block(block, keys));
-        }
-        return result;
+    fn encrypt(&mut self, plaintext: Vec<u64>, key: u64) -> Vec<u64> {
+        return self.process(&des::encrypt_block, plaintext, key);
     }
 
-    fn decrypt(&mut self, ciphertext: &Vec<u64>, key: u64) -> Vec<u64> {
-        let mut result: Vec<u64> = Vec::new();
-        let keys = des::generate_round_keys(key);
-        for &block in ciphertext.iter() {
-            result.push(des::decrypt_block(block, keys));
-        }
-        return result;
+    fn decrypt(&mut self, ciphertext: Vec<u64>, key: u64) -> Vec<u64> {
+        return self.process(&des::decrypt_block, ciphertext, key);
     }
 }
 
 impl Cipher for CBC {
-    fn encrypt(&mut self, plaintext: &Vec<u64>, key: u64) -> Vec<u64> {
+    fn encrypt(&mut self, plaintext: Vec<u64>, key: u64) -> Vec<u64> {
         let mut result: Vec<u64> = Vec::with_capacity(plaintext.len() + 1);
         let keys = des::generate_round_keys(key);
 
@@ -83,7 +146,7 @@ impl Cipher for CBC {
         return result;
     }
 
-    fn decrypt(&mut self, ciphertext: &Vec<u64>, key: u64) -> Vec<u64> {
+    fn decrypt(&mut self, ciphertext: Vec<u64>, key: u64) -> Vec<u64> {
         let mut result: Vec<u64> = Vec::with_capacity(ciphertext.len() - 1);
         let keys = des::generate_round_keys(key);
 
@@ -133,10 +196,10 @@ mod tests {
             let key: u64 = random_u64();
 
             let mut mode: Box<dyn Cipher> = Box::new(ECB::new());
-            let ciphertext = encrypt(&plaintext, key, &mut mode);
+            let ciphertext = encrypt(plaintext.to_vec(), key, &mut mode);
 
             let mut mode: Box<dyn Cipher> = Box::new(ECB::new());
-            let decrypted = decrypt(&ciphertext, key, &mut mode);
+            let decrypted = decrypt(ciphertext.to_vec(), key, &mut mode);
 
             assert_eq!(plaintext, decrypted);
         }
@@ -155,10 +218,10 @@ mod tests {
             let key: u64 = random_u64();
 
             let mut mode: Box<dyn Cipher> = Box::new(CBC::new());
-            let ciphertext = encrypt(&plaintext, key, &mut mode);
+            let ciphertext = encrypt(plaintext.to_vec(), key, &mut mode);
 
             let mut mode: Box<dyn Cipher> = Box::new(CBC::new());
-            let decrypted = decrypt(&ciphertext, key, &mut mode);
+            let decrypted = decrypt(ciphertext.to_vec(), key, &mut mode);
 
             assert_eq!(plaintext, decrypted);
         }
@@ -180,8 +243,8 @@ mod tests {
 
             let mut ecb_mode: Box<dyn Cipher> = Box::new(ECB::new());
             let mut cbc_mode: Box<dyn Cipher> = Box::new(CBC::new());
-            let ecb_ciphertext = encrypt(&plaintext, key, &mut ecb_mode);
-            let cbc_ciphertext = encrypt(&plaintext, key, &mut cbc_mode);
+            let ecb_ciphertext = encrypt(plaintext.to_vec(), key, &mut ecb_mode);
+            let cbc_ciphertext = encrypt(plaintext.to_vec(), key, &mut cbc_mode);
 
             for i in 0..num_bytes {
                 if i == 0 || cbc_ciphertext[i-1] != 0 {
@@ -214,8 +277,8 @@ mod tests {
 
             let mut ecb_mode: Box<dyn Cipher> = Box::new(ECB::new());
             let mut cbc_mode: Box<dyn Cipher> = Box::new(CBC::new());
-            let cbc_ciphertext = encrypt(&plaintext, key, &mut cbc_mode);
-            let wrong_plaintext = decrypt(&cbc_ciphertext, key, &mut ecb_mode);
+            let cbc_ciphertext = encrypt(plaintext.to_vec(), key, &mut cbc_mode);
+            let wrong_plaintext = decrypt(cbc_ciphertext.to_vec(), key, &mut ecb_mode);
 
             assert_ne!(plaintext, wrong_plaintext);
         }
@@ -235,8 +298,8 @@ mod tests {
 
             let mut ecb_mode: Box<dyn Cipher> = Box::new(ECB::new());
             let mut cbc_mode: Box<dyn Cipher> = Box::new(CBC::new());
-            let ecb_ciphertext = encrypt(&plaintext, key, &mut ecb_mode);
-            let wrong_plaintext = decrypt(&ecb_ciphertext, key, &mut cbc_mode);
+            let ecb_ciphertext = encrypt(plaintext.to_vec(), key, &mut ecb_mode);
+            let wrong_plaintext = decrypt(ecb_ciphertext.to_vec(), key, &mut cbc_mode);
 
             assert_ne!(plaintext, wrong_plaintext);
         }

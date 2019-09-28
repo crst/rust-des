@@ -11,10 +11,10 @@ fn main() {
     println!("Sample input: {:?}", sample_inp);
 
     let mut mode: Box<dyn my_des::Cipher> = Box::new(my_des::ECB::new());
-    let ciphertext = my_des::encrypt(&sample_inp, sample_key, &mut mode);
+    let ciphertext = my_des::encrypt(sample_inp, sample_key, &mut mode);
     println!("ECB cipher: {:?}", ciphertext);
 
     let mut mode: Box<dyn my_des::Cipher> = Box::new(my_des::ECB::new());
-    let plaintext = my_des::decrypt(&ciphertext, sample_key, &mut mode);
+    let plaintext = my_des::decrypt(ciphertext, sample_key, &mut mode);
     println!("Plaintext: {:?}", plaintext);
 }

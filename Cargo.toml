@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 clap = "2.33.0"
 md5 = "0.6.1"
+num_cpus = "1.0"
 rand = "0.7.0"
 
 [dev-dependencies]
